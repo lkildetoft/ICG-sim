@@ -88,13 +88,13 @@ Parameters:
 #include "Distrs.h"
 #include "Simulation.h"
 #include "RandChoice.h"
-#include "2dHist.h"
+#include "ddHist.h"
 
 int main(int argc, const char * argv[]) {
     //Sim parameters, see above.
-    int niters = 600; 
+    int niters = 1000; 
     int nvals = 200;
-    int nphotons = (int)3e7;
+    int nphotons = (int)5e7;
     
     float ls_x = 1;
     float ls_y = 0;
@@ -109,23 +109,23 @@ int main(int argc, const char * argv[]) {
     float e_mus_fl = 40;
     float e_mua_fl = 1.2;
 
-    float i_mus = 30;
-    float i_mua = 300;
+    float i_mus = 2.1;
+    float i_mua = 5;
 
     float g_ex = 0.85;
     float g_fl = 0.8;
 
-    float injected_conc = 0.7;
+    float injected_conc = 0.25;
     float mal_conc = 0;
     float icg_conc_upper = 0;
     float icg_conc_lower = 0;
 
-    float mal_factor = 0.00001;
-    float icg_upper_factor = 0.1;
-    float icg_lower_factor = 0.001;
+    float mal_factor = 0.000001;
+    float icg_upper_factor = 0.01;
+    float icg_lower_factor = 0.0001;
 
-    float l_mal_area = 10;
-    float h_mal_area = 15;
+    float l_mal_area = 12;
+    float h_mal_area = 13;
 
     float fl_ratio = 10;
 
