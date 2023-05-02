@@ -84,6 +84,7 @@ Parameters:
 #include <time.h>
 #include <string.h>
 #include <math.h>
+#include <omp.h>
 
 #include "Distrs.h"
 #include "Simulation.h"
@@ -92,9 +93,10 @@ Parameters:
 
 int main(int argc, const char * argv[]) {
     //Sim parameters, see above.
-    int niters = 1000; 
-    int nvals = 200;
-    int nphotons = (int)5e7;
+    //clock_t begin = clock();
+    int niters = 2000; 
+    int nvals = 300;
+    int nphotons = (int)1e8;
     
     float ls_x = 1;
     float ls_y = 0;
@@ -103,34 +105,31 @@ int main(int argc, const char * argv[]) {
 
     float e_xmax = 2;
     float e_ymax = 2;
-    float e_zmax = 25;
+    float e_zmax = 5;
     float e_mus_ex = 29.5;
     float e_mua_ex = 3.3;
-    float e_mus_fl = 40;
-    float e_mua_fl = 1.2;
+    float e_mus_fl = 33;
+    float e_mua_fl = 3.3;
 
     float i_mus = 2.1;
-    float i_mua = 5;
+    float i_mua = 209;
 
     float g_ex = 0.85;
     float g_fl = 0.8;
 
-    float injected_conc = 0.25;
-    float mal_conc = 0;
-    float icg_conc_upper = 0;
-    float icg_conc_lower = 0;
+    float inj_conc = 0.25;
+    float icg_upper_factor = 0.1;
+    float icg_lower_factor = 0.001;
 
-    float mal_factor = 0.000001;
-    float icg_upper_factor = 0.01;
-    float icg_lower_factor = 0.0001;
+    int ana_idx = 24;
 
-    float l_mal_area = 12;
-    float h_mal_area = 13;
-
-    float fl_ratio = 10;
+    int fl_ratio = 20;
 
     int nrows = 32;
     int ncols = 24;
+
+    float *conc_arr = calloc(nrows, sizeof(float));
+
     /*
     Here, the actual simulation starts and no more parameters should
     require modification. 
@@ -140,7 +139,7 @@ int main(int argc, const char * argv[]) {
     indocyn *icg = &(indocyn){i_mus, i_mua};
     int npackets = nphotons/niters;
     float fl_choice[2] = {1, 0};
-    float fl_prob[2] = {1 - 1/fl_ratio, 1/fl_ratio};
+    float fl_prob[2] = {(float)(1 - 1/fl_ratio), (float)(1/fl_ratio)};
     //Seed random generator
     srand((unsigned)time(NULL));
     //Create output files and their corresponding file-pointers.
@@ -159,7 +158,7 @@ int main(int argc, const char * argv[]) {
     float *rl_edges = calloc(nrows, sizeof(float));
     float *rh_edges = calloc(nrows, sizeof(float));
     genBinEdges(rl_edges, rh_edges, 0, eso->zmax, nrows);
-
+    printf("Anastomosis located at %f cm", (rl_edges[ana_idx] + rh_edges[ana_idx])/2);
     float *cl_edges = calloc(nrows, sizeof(float));
     float *ch_edges = calloc(nrows, sizeof(float));
     genBinEdges(cl_edges, ch_edges, 0, eso->xmax, ncols);
@@ -186,6 +185,7 @@ int main(int argc, const char * argv[]) {
     
     printf("Initializing %d photons, please wait \n", nphotons);
     //Fill photon array with appropriate homogenous distribution over the tissue surface.
+    #pragma omp parallel for
     for (int i = 0; i < nphotons; i++) {
         float ang = 2*pi*((float)rand()/(float)RAND_MAX);
         float sp = (source->spread_r)*((float)rand()/(float)RAND_MAX);
@@ -195,23 +195,19 @@ int main(int argc, const char * argv[]) {
     printf("Simulation started with %d photons, please wait \n", nphotons);
     //Main simulation loop
     int curr_iter_max = npackets;
-    for (int i = 0; i < niters; i++) {
+    for (int iter = 0; iter < niters; iter++) {
         //Keep track of the number of absorbed/fluorescense photons each iteration.
-        int n_fluor = 0;
-        int n_abs = 0;
-        printf("Running simulation, %f %% done \n", ((float)i/niters)*100);
+        printf("Running simulation, %f %% done \n", ((float)iter/niters)*100);
         printf("Working on photons 0 to %d \n", curr_iter_max);
         //Update the ICG-concentration in each area
-        if (mal_conc <= injected_conc) {
-            mal_conc += mal_factor;
-        } 
-        if (icg_conc_upper <= injected_conc) {
-            icg_conc_upper += icg_upper_factor;
-        } 
-        if (icg_conc_lower <= injected_conc) {
-            icg_conc_lower += icg_lower_factor;
-        } 
+        for (int i = 0; i < nrows; i++) {
+            if (conc_arr[i] < inj_conc) {
+                conc_arr[i] += flowGrad(i, ana_idx, inj_conc, icg_lower_factor, icg_upper_factor);
+            } else {
+            }
+        }
         //Loop over all photons
+        #pragma omp parallel for
         for (int q = 0; q < curr_iter_max; q++) {
             photon *p;
             p = &photons[q];
@@ -224,62 +220,75 @@ int main(int argc, const char * argv[]) {
                 }
             }
             //Let the current photon interact/fluoress appropriately depending on its current parameters
-            if ((p->w > 0.01) && (p->outside == 0) && p->fluor == 0) {
+            if ((p->w > 0) && (p->outside == 0) && p->fluor == 0) {
                 if (((p->x)*(p->x - eso->xmax) > 0) || ((p->y)*(p->y - eso->ymax) > 0) || ((p->z)*(p->z - eso->zmax) > 0)) {
                     p->outside = 1;
                 } else {
-                    if ((p->z - l_mal_area)*(p->z - h_mal_area) <= 0) {
-                        interact(p, eso, icg, mal_conc, theta, t_plist_ex, nvals);
-                    } else if ((p->z - eso->zmax)*(p->z - h_mal_area) <= 0) {
-                        interact(p, eso, icg, icg_conc_lower, theta, t_plist_ex, nvals);
-                    } else {
-                        interact(p, eso, icg, icg_conc_upper, theta, t_plist_ex, nvals);
+                    for (int i = 0; i < nrows; i++) {
+                        float curr_bin_l = rl_edges[i];
+                        float curr_bin_h = rh_edges[i];
+                        if ((p->z - curr_bin_l)*(p->z - curr_bin_h) <= 0) {
+                            interact(p, eso, icg, conc_arr[i], theta, t_plist_ex, nvals);
+                        }
                     }
                 }
-            } else if ((p->w > 0.0) && (p->outside == 0) && p->fluor == 1) {
+            } else if ((p->w > 0) && (p->outside == 0) && p->fluor == 1) {
                 if (((p->x)*(p->x - eso->xmax) > 0) || ((p->y)*(p->y - eso->ymax) > 0) || ((p->z)*(p->z - eso->zmax) > 0)) {
                     p->outside = 1;
                 } else {
-                    fluoress(p, eso, theta, t_plist_fl, nvals);
+                    for (int i = 0; i < nrows; i++) {
+                        float curr_bin_l = rl_edges[i];
+                        float curr_bin_h = rh_edges[i];
+                        if ((p->z - curr_bin_l)*(p->z - curr_bin_h) <= 0) {
+                            fluoress(p, eso, icg, conc_arr[i], theta, t_plist_fl, nvals);
+                        }
+                    }
                 }
             }
+            
             //Generate histograms
-            if ((p->w <= 0.01) && (p->outside == 0) && (p->curr_abs == 1) && (p->fluor == 0)) {
+            if ((p->w <= 0.1) && (p->outside == 0) && (p->curr_abs == 1) && (p->fluor == 0)) {
                 genHist(front_hist_abs, rl_edges, rh_edges, cl_edges, ch_edges, nrows, ncols, p->x, p->z);
                 genHist(depth_hist_abs, rl_edges, rh_edges, cl_edges, ch_edges, nrows, ncols, p->y, p->z);
-                n_abs += 1;
-            } else if ((p->w > 0.0) && (p->fluor == 1) && (p->y <= 0.05) && (p->outside == 0)) {
+            } 
+    
+            if ((p->w > 0) && (p->fluor == 1) && (p->outside == 0) && (p->y <= 0.1)) {
                 genHist(front_hist_fl, rl_edges, rh_edges, cl_edges, ch_edges, nrows, ncols, p->x, p->z);
                 genHist(depth_hist_fl, rl_edges, rh_edges, cl_edges, ch_edges, nrows, ncols, p->y, p->z);
-                n_fluor += 1;
             }
         }
         //Write each histogram at each iteration to the appropriate file
         for (int row = 0; row < nrows; row++) {
             for (int col = 0; col < ncols; col++) {
-                if (n_fluor > 0) {
-                    fprintf(frontFluor, "%d, ", front_hist_fl[row][col]);
-                    fprintf(depthFluor, "%d, ", depth_hist_fl[row][col]);
+                fprintf(frontFluor, "%d", front_hist_fl[row][col]);
+                fprintf(depthFluor, "%d", depth_hist_fl[row][col]);
+                fprintf(frontAbs, "%d", front_hist_abs[row][col]);
+                fprintf(depthAbs, "%d", depth_hist_abs[row][col]);
+                if (col < (ncols - 1)) {
+                    fprintf(frontFluor, ",");
+                    fprintf(depthFluor, ",");
+                    fprintf(frontAbs, ",");
+                    fprintf(depthAbs, ",");
                 } 
-                if (n_abs > 0) {
-                    fprintf(frontAbs, "%d, ", front_hist_abs[row][col]);
-                    fprintf(depthAbs, "%d, ", depth_hist_abs[row][col]);
-                }
             }
-            if (n_fluor > 0) {
-                fprintf(frontFluor, "\n");
-                fprintf(depthFluor, "\n");
-            }
-            if (n_abs > 0) {
-                fprintf(frontAbs, "\n");
-                fprintf(depthAbs, "\n");
-            }
+            fprintf(frontFluor, "\n");
+            fprintf(depthFluor, "\n");
+            fprintf(frontAbs, "\n");
+            fprintf(depthAbs, "\n");
         }
         curr_iter_max += npackets;
     }
     //Finished! Nice
     printf("Done \n");
+    //clock_t end = clock();
+    //double benchmark = (double)(end - begin) / CLOCKS_PER_SEC;
+    //printf("%lf s", benchmark);
     //Free up memory
+    fclose(frontFluor);
+    fclose(frontAbs);
+    fclose(depthFluor);
+    fclose(depthAbs);
+
     free(photons);
     free(theta);
     free(t_plist_ex);
@@ -295,10 +304,7 @@ int main(int argc, const char * argv[]) {
     free(depth_hist_fl);
     free(depth_hist_abs);
     //Close all file-pointers
-    fclose(frontFluor);
-    fclose(frontAbs);
-    fclose(depthFluor);
-    fclose(depthAbs);
+
 
     return 0;
 }
